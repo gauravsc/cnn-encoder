@@ -6,13 +6,12 @@ import numpy as np
 class CNNModel(nn.Module):
 	 def __init__(
 			self,
-			n_src_vocab, n_tgt_vocab, len_max_seq, d_word_vec, emb_mat_src,
-			d_model, dropout=0.1):
+			n_src_vocab, n_tgt_vocab, len_max_seq, d_word_vec, emb_mat_src, dropout=0.1):
 
 		super().__init__()
 
 		n_src_vocab, d_word_vec = emb_mat_src.size()
-		self.src_word_emb = nn.Embedding(n_src_vocab, d_word_vec, padding_idx=Constants.PAD)
+		self.src_word_emb = nn.Embedding(n_src_vocab, d_word_vec, padding_idx=0)
 		self.src_word_emb.load_state_dict({'weight': emb_mat_src})
 
 		self.conv_layer_1 = nn.Conv1d(d_word_vec, 256, 3, padding=1, stride=1)
@@ -40,7 +39,7 @@ class CNNModel(nn.Module):
 		output = self.relu_activation(output)
 		output = self.maxpool(output)
 		output = output.view(output.size()[0], -1)
-		output = self.fc_layer_1(output)
-		output = self.output_layer(output)
+		output_fc_layer = self.fc_layer_1(output)
+		target = self.output_layer(output_fc_layer)
 
-		return output
+		return target, output_fc_layer

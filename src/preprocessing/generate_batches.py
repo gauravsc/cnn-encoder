@@ -4,7 +4,7 @@ import json
 import pickle
 
 # Some global variables
-file_size = 2
+file_size = 5000
 
 def mesh_name_to_id_mapping():
 	with open('../data/bioasq_dataset/MeSH_name_id_mapping_2017.txt','r') as f:
@@ -21,7 +21,7 @@ def mesh_name_to_id_mapping():
 # generatie batches and write them to a file
 def generate_batches():
 
-	with open('../data/bioasq_dataset/toyMeSH_2017.json', 'r', encoding="utf8", errors='ignore') as f:
+	with open('../../seq-to-tree/data/bioasq_dataset/allMeSH_2017.json', 'r', encoding="utf8", errors='ignore') as f:
 		training_docs = json.load(f)['articles']
 	
 	english_name_to_mesh_id = mesh_name_to_id_mapping()	

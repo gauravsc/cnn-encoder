@@ -10,9 +10,11 @@ from eval.eval import f1_score
 from utils.embedding_operations import read_embeddings
 
 # Global variables
-batch_size = 32
+batch_size = 128
 threshold = 0.5
-save_after_iters = 10000
+save_after_iters = (10000000//batch_size)
+clip_norm = 10.0
+max_epochs = 100
 device = 'cuda:0'
 
 def get_vocab(data_file):
@@ -72,32 +74,57 @@ def train(model, criterion, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab):
 	# read the list of files to be used for training
 	path = '../data/bioasq_dataset/train_data'
 	list_files = os.listdir(path)
-
+	best_f1_score = -100
 	iters = 0
-	for file in list_files:
-		file_content = json.load(open(path+'/'+file, 'r'))
-		i = 0
-		while i < len(file_content):
-			input_idx_seq, target, _ = prepare_minibatch(file_content[i:i+batch_size], mesh_to_idx, word_to_idx)			
-			input_idx_seq = torch.tensor(input_idx_seq).to(device, dtype=torch.long)
-			target = torch.tensor(target).to(device, dtype=torch.float)
-			predict, _ = model(input_idx_seq)
+	list_losses = []
+	for ep in range(max_epochs):
+		for file in list_files:
+			file_content = json.load(open(path+'/'+file, 'r'))
+			i = 0
+			while i < len(file_content):
+				input_idx_seq, target, labels = prepare_minibatch(file_content[i:i+batch_size], mesh_to_idx, word_to_idx)
+				
+				# mask = np.zeros(target.shape)
+				# mask[target==1] = 1
+				# for k in range(target.shape[0]):
+				# 	# idx_zeros = np.random.choice(np.where(mask[k, :]==0)[0], 30*len(labels[k]))
+				# 	idx_zeros = np.where(mask[k, :]==0)[0]
+				# 	mask[k, idx_zeros] = 1
 
-			# computing the loss over the prediction
-			loss = criterion(target, predict)
-			print ("loss: ", loss)
+				# mask = torch.tensor(mask).to(device, dtype=torch.float)
 
-			# back-propagation
-			optimizer.zero_grad()
-			loss.backward()
-			torch.nn.utils.clip_grad_norm_(transformer.parameters(), clip_norm)
-			optimizer.step()
+				input_idx_seq = torch.tensor(input_idx_seq).to(device, dtype=torch.long)
+				target = torch.tensor(target).to(device, dtype=torch.float)
+				output, _ = model(input_idx_seq)
 
-			i += batch_size
-			iters += 1
+				# computing the loss over the prediction
+				loss = criterion(output, target)
+				# loss = loss * mask
+				# loss = torch.sum(loss, dim=(1))/torch.sum(mask, dim=(1))
 
-			if iters % save_after_iters == 0:
-				torch.save(model.state_dict(), '../saved_models/model.pt')
+				loss = torch.mean(loss, dim=(1))
+				loss = torch.mean(loss)
+
+				print ("loss: ", loss)
+
+				# back-propagation
+				optimizer.zero_grad()
+				loss.backward()
+				torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm)
+				optimizer.step()
+
+				i += batch_size
+				iters += 1
+
+				list_losses.append(loss.data.cpu().numpy())
+
+				if iters % save_after_iters == 0:
+					f1_score_curr = validate(model, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab)
+					print("Loss after ", iters, ":  ", np.mean(list_losses))
+					list_losses = []
+					if f1_score_curr > best_f1_score:
+						torch.save(model.state_dict(), '../saved_models/model.pt')
+						best_f1_score = f1_score_curr
 
 	return model 
 
@@ -113,13 +140,14 @@ def validate(model, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab):
 		i = 0
 		while i < len(file_content):
 			input_idx_seq, target, true_labels_batch = prepare_minibatch(file_content[i:i+batch_size], mesh_to_idx, word_to_idx)			
-			input_idx_seq = input_idx_seq.to(device, dtype=torch.long)
+			input_idx_seq = torch.tensor(input_idx_seq).to(device, dtype=torch.long)
 			predict, _ = model(input_idx_seq)
+			predict = F.sigmoid(predict)
 			predict[predict>threshold] = 1
 			predict[predict<threshold] = 0
-			predict = predict.to('cpu').numpy()
+			predict = predict.data.to('cpu').numpy()
 
-			for j in predict.shape[0]:
+			for j in range(predict.shape[0]):
 				nnz_idx = np.nonzero(predict[j, :])[0]
 				pred_labels_article = [mesh_vocab[idx] for idx in nnz_idx]
 				pred_labels.append(pred_labels_article)
@@ -127,14 +155,17 @@ def validate(model, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab):
 			true_labels.extend(true_labels_batch)
 			i += batch_size
 
-	f1_score_micro, f1_score_macro = f1_score(true_labels, pred_labels)
+	# for k in range(len(true_labels)):
+	# 	print (true_labels[k])
+	# 	print (pred_labels[k])
+
+	f1_score_micro, f1_score_macro = f1_score(true_labels, pred_labels) 
 	print ("f1 score micro: ", f1_score_micro, " f1 score macro: ", f1_score_macro)
 
 	return f1_score_micro
 
-if __name__ == '__main__':
-	
 
+if __name__ == '__main__':
 	# location of the toy dataset ---> this needs to be replaced with the final dataset
 	data_file = '../data/bioasq_dataset/toyMeSH_2017.json'
 
@@ -159,8 +190,8 @@ if __name__ == '__main__':
 	learning_rate = 0.005
 
 	# read source word embedding matrix
-	# emb_mat_src = read_embeddings('../data/embeddings/word.processed.embeddings', src_vocab)
-	emb_mat_src = np.random.standard_normal((n_src_vocab, 200))
+	emb_mat_src = read_embeddings('../data/embeddings/word.processed.embeddings', src_vocab)
+	# emb_mat_src = np.random.standard_normal((n_src_vocab, 200))
 	emb_mat_src = torch.tensor(emb_mat_src).to(device)	
 
 	model = CNNModel(n_src_vocab, n_tgt_vocab, max_seq_len, d_word_vec, emb_mat_src, dropout=dropout)
@@ -168,13 +199,10 @@ if __name__ == '__main__':
 	model.to(device)
 
 	criterion = torch.nn.BCEWithLogitsLoss(reduction="none")
-	optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9,0.999))
-	# optimizer = torch.optim.SGD(transformer.parameters(), lr=learning_rate)
+	# optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9,0.999))
+	optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
 
 	train(model, criterion, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab)
-
-
-
 
 
 

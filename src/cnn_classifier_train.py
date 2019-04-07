@@ -2,6 +2,8 @@ import json
 import os
 import pickle
 import numpy as np
+import random as rd
+from nltk.tokenize import word_tokenize
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,10 +14,16 @@ from utils.embedding_operations import read_embeddings
 # Global variables
 batch_size = 128
 threshold = 0.5
+vocab_size = 250000
 save_after_iters = (10000000//batch_size)
 clip_norm = 10.0
 max_epochs = 100
 device = 'cuda:0'
+
+# set random seed
+rd.seed(9001)
+np.random.seed(9001)
+
 
 def get_vocab(data_file):
 	if os.path.isfile('../data/english_vocab.pkl'):
@@ -27,7 +35,8 @@ def get_vocab(data_file):
 	
 	word_count = {}
 	for record in records:
-		words_in_abstract = record['abstractText'].lower().split(' ')
+		words_in_abstract = word_tokenize(record['abstractText'].lower())
+		# words_in_abstract = record['abstractText'].lower().split(' ')
 		for word in words_in_abstract:
 			if word in word_count:
 				word_count[word] += 1
@@ -54,7 +63,8 @@ def prepare_minibatch(data, mesh_to_idx, word_to_idx):
 	Y = []
 	labels = []
 	for article in data:
-		word_seq = article['abstract'].lower().strip().split(' ')
+		# word_seq = article['abstract'].lower().strip().split(' ')
+		word_seq = word_tokenize(article['abstract'].lower())
 		idx_seq = [word_to_idx[word] if word in word_to_idx else word_to_idx['unk'] for word in word_seq]
 		idx_seq = idx_seq[:max_seq_len]
 		src_seq = np.zeros(max_seq_len)

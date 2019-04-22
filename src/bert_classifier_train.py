@@ -7,15 +7,13 @@ from nltk.tokenize import word_tokenize
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from model.Models import CNNModel
+from pytorch_pretrained_bert import BertTokenizer
+from model.Models import CNNModel, BERTCLassifierModel
 from eval.eval import f1_score
 from utils.embedding_operations import read_embeddings
 
 # Global variables
-batch_size = 128
-# threshold = 0.3
-vocab_size = 250000
-save_after_iters = (10000000//batch_size)
+batch_size = 4
 clip_norm = 10.0
 max_epochs = 100
 device = 'cuda:0'
@@ -27,51 +25,54 @@ rd.seed(9001)
 np.random.seed(9001)
 
 
-def get_vocab(data_file):
-	if os.path.isfile('../data/english_vocab.pkl'):
-		vocab, word_to_ind = pickle.load(open('../data/english_vocab.pkl','rb'))
-		return vocab, word_to_ind
+# def get_vocab(data_file):
+# 	if os.path.isfile('../data/english_vocab.pkl'):
+# 		vocab, word_to_ind = pickle.load(open('../data/english_vocab.pkl','rb'))
+# 		return vocab, word_to_ind
 
-	with open('../../seq-to-tree/data/bioasq_dataset/allMeSH_2017.json', 'r', encoding="utf8", errors='ignore') as f:
-		records = json.load(f)['articles']
+# 	with open('../../seq-to-tree/data/bioasq_dataset/allMeSH_2017.json', 'r', encoding="utf8", errors='ignore') as f:
+# 		records = json.load(f)['articles']
 	
-	word_count = {}
-	for record in records:
-		words_in_abstract = word_tokenize(record['abstractText'].lower())
-		# words_in_abstract = record['abstractText'].lower().split(' ')
-		for word in words_in_abstract:
-			if word in word_count:
-				word_count[word] += 1
-			else:
-				word_count[word] = 1
+# 	word_count = {}
+# 	for record in records:
+# 		words_in_abstract = word_tokenize(record['abstractText'].lower())
+# 		# words_in_abstract = record['abstractText'].lower().split(' ')
+# 		for word in words_in_abstract:
+# 			if word in word_count:
+# 				word_count[word] += 1
+# 			else:
+# 				word_count[word] = 1
 
-	vocab = [k for k in sorted(word_count, key=word_count.get, reverse=True)]
-	# reduce the size of vocab to max size
-	vocab = vocab[:vocab_size]
-	# add the unknown token to the vocab
-	vocab = ['$PAD$'] + vocab + ['unk']
+# 	vocab = [k for k in sorted(word_count, key=word_count.get, reverse=True)]
+# 	# reduce the size of vocab to max size
+# 	vocab = vocab[:vocab_size]
+# 	# add the unknown token to the vocab
+# 	vocab = ['$PAD$'] + vocab + ['unk']
 
-	word_to_ind = {}
-	for i, word in enumerate(vocab):
-		word_to_ind[word] = i
+# 	word_to_ind = {}
+# 	for i, word in enumerate(vocab):
+# 		word_to_ind[word] = i
 
-	pickle.dump((vocab, word_to_ind), open('../data/english_vocab.pkl','wb'))
+# 	pickle.dump((vocab, word_to_ind), open('../data/english_vocab.pkl','wb'))
 
-	return vocab, word_to_ind
+# 	return vocab, word_to_ind
 
 
-def prepare_minibatch(data, mesh_to_idx, word_to_idx):
+def prepare_minibatch(data, mesh_to_idx, tokenizer):
 	X = []
 	Y = []
+	input_mask = []
 	labels = []
 	for article in data:
 		# word_seq = article['abstract'].lower().strip().split(' ')
-		word_seq = word_tokenize(article['abstract'].lower())
-		idx_seq = [word_to_idx[word] if word in word_to_idx else word_to_idx['unk'] for word in word_seq]
-		idx_seq = idx_seq[:max_seq_len]
+		tokenized_text = tokenizer.tokenize('[CLS] '+article['abstract'].lower())[0:512]
+		idx_seq = tokenizer.convert_tokens_to_ids(tokenized_text)
 		src_seq = np.zeros(max_seq_len)
 		src_seq[0:len(idx_seq)] = idx_seq
 		X.append(src_seq)
+		mask = np.zeros(max_seq_len)
+		mask[0:len(idx_seq)] = 1
+		input_mask.append(mask)
 		tgt_seq = np.zeros(len(mesh_to_idx))
 		tgt_idx = [mesh_to_idx[mesh] for mesh in article['mesh_labels']]
 		tgt_seq[tgt_idx] = 1
@@ -79,24 +80,26 @@ def prepare_minibatch(data, mesh_to_idx, word_to_idx):
 		labels.append(article['mesh_labels'])
 	X = np.vstack(X)
 	Y = np.vstack(Y)
-	return X, Y, labels
+	input_mask = np.vstack(input_mask)
+	return X, input_mask, Y, labels
 
 
-def train(model, criterion, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab):
+def train(model, criterion, mesh_to_idx, mesh_vocab, tokenizer):
 	# read the list of files to be used for training
 	path = '../data/bioasq_dataset/train_data'
-	list_files = os.listdir(path)[0:20]
+	list_files = os.listdir(path)[:20]
 	print (list_files)
 	best_f1_score = -100
 	iters = 0
 	list_losses = []
 	for ep in range(max_epochs):
+		model = model.train()
 		for file in list_files:
 			print("training file:", file)
 			file_content = json.load(open(path+'/'+file, 'r'))
 			i = 0
 			while i < len(file_content):
-				input_idx_seq, target, labels = prepare_minibatch(file_content[i:i+batch_size], mesh_to_idx, word_to_idx)
+				input_idx_seq, input_mask, target, labels = prepare_minibatch(file_content[i:i+batch_size], mesh_to_idx, tokenizer)
 				
 				# mask = np.zeros(target.shape)
 				# mask[target==1] = 1
@@ -108,8 +111,9 @@ def train(model, criterion, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab):
 				# mask = torch.tensor(mask).to(device, dtype=torch.float)
 
 				input_idx_seq = torch.tensor(input_idx_seq).to(device, dtype=torch.long)
+				input_mask = torch.tensor(input_mask).to(device, dtype=torch.long)
 				target = torch.tensor(target).to(device, dtype=torch.float)
-				output, _ = model(input_idx_seq)
+				output = model(input_idx_seq, input_mask)
 
 				# computing the loss over the prediction
 				loss = criterion(output, target)
@@ -128,24 +132,35 @@ def train(model, criterion, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab):
 				optimizer.step()
 
 				i += batch_size
-				iters += 1
+				# iters += 1
 
 				list_losses.append(loss.data.cpu().numpy())
 
+				# if iters % save_after_iters == 0:
+				# 	model = model.eval()
+				# 	f1_score_curr = validate(model, mesh_to_idx, mesh_vocab, tokenizer)
+				# 	model = model.train()
+				# 	print("Loss after ", iters, ":  ", np.mean(list_losses))
+				# 	list_losses = []
+				# 	if f1_score_curr > best_f1_score:
+				# 		torch.save(model.state_dict(), '../saved_models/bert_based/model.pt')
+				# 		best_f1_score = f1_score_curr
+
 		for threshold in threshold_list:
-			f1_score_curr = validate(model, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab, threshold)
+			f1_score_curr = validate(model, mesh_to_idx, mesh_vocab, tokenizer, threshold)
 			print ("F1 score: ", f1_score_curr, " at threshold: ", threshold)
 			if f1_score_curr > best_f1_score:
-				torch.save(model.state_dict(), '../saved_models/model.pt')
+				torch.save(model.state_dict(), '../saved_models/bert_based/model.pt')
 				best_f1_score = f1_score_curr
-
+		
 		print("Loss after ", iters, ":  ", np.mean(list_losses))
 		list_losses = []
+		
 
 	return model 
 
 
-def validate(model, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab, threshold):
+def validate(model, mesh_to_idx, mesh_vocab, tokenizer, threshold):
 	model = model.eval()
 	path = '../data/bioasq_dataset/val_data'
 	list_files = os.listdir(path)
@@ -157,9 +172,10 @@ def validate(model, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab, threshold):
 		file_content = json.load(open(path+'/'+file, 'r'))
 		i = 0
 		while i < len(file_content):
-			input_idx_seq, target, true_labels_batch = prepare_minibatch(file_content[i:i+64], mesh_to_idx, word_to_idx)			
+			input_idx_seq, input_mask, target, true_labels_batch = prepare_minibatch(file_content[i:i+4], mesh_to_idx, tokenizer)			
 			input_idx_seq = torch.tensor(input_idx_seq).to(device, dtype=torch.long)
-			predict, _ = model(input_idx_seq)
+			input_mask = torch.tensor(input_mask).to(device, dtype=torch.long)
+			predict = model(input_idx_seq, input_mask)
 			predict = F.sigmoid(predict)
 			predict[predict>threshold] = 1
 			predict[predict<threshold] = 0
@@ -171,7 +187,7 @@ def validate(model, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab, threshold):
 				pred_labels.append(pred_labels_article)
 
 			true_labels.extend(true_labels_batch)
-			i += 64
+			i += 4
 
 	# for k in range(len(true_labels)):
 	# 	print (true_labels[k])
@@ -185,11 +201,14 @@ def validate(model, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab, threshold):
 
 if __name__ == '__main__':
 	# location of the toy dataset ---> this needs to be replaced with the final dataset
-	data_file = '../data/bioasq_dataset/toyMeSH_2017.json'
+	# data_file = '../data/bioasq_dataset/toyMeSH_2017.json'
 
-	# create the vocabulary for the input 
-	src_vocab, word_to_idx = get_vocab(data_file)
-	print("vocabulary of size: ", len(src_vocab))
+	# # create the vocabulary for the input 
+	# src_vocab, word_to_idx = get_vocab(data_file)
+	# print("vocabulary of size: ", len(src_vocab))
+
+	# Load pre-trained model tokenizer (vocabulary)
+	tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', max_len=512)
 
 	# create the vocabulary of mesh terms
 	with open('../data/mesh_to_idx.pkl', 'rb') as fread:
@@ -200,31 +219,25 @@ if __name__ == '__main__':
 		mesh_vocab[idx] = mesh
 
 	# setting different model parameters
-	n_src_vocab = len(src_vocab)
 	n_tgt_vocab = len(mesh_to_idx)
 	max_seq_len = 512
 	d_word_vec = 200
 	dropout = 0.1
 	learning_rate = 0.005
 
-	# read source word embedding matrix
-	emb_mat_src = read_embeddings('../data/embeddings/word.processed.embeddings', src_vocab)
-	# emb_mat_src = np.random.standard_normal((n_src_vocab, 200))
-	emb_mat_src = torch.tensor(emb_mat_src).to(device)	
-
-	model = CNNModel(n_src_vocab, n_tgt_vocab, max_seq_len, d_word_vec, emb_mat_src, dropout=dropout)
-	model = nn.DataParallel(model, output_device=device)
+	model = BERTCLassifierModel(n_tgt_vocab, dropout=dropout)
+	# model = nn.DataParallel(model, output_device=device)
 	model.to(device)
 
-	if load_model and os.path.isfile('../saved_models/model.pt'):
-		model.load_state_dict(torch.load('../saved_models/model.pt'))
+	if load_model and os.path.isfile('../saved_models/bert_based/model.pt'):
+		model.load_state_dict(torch.load('../saved_models/bert_based/model.pt'))
 		print ("Done loading the saved model .....")
 
 	criterion = torch.nn.BCEWithLogitsLoss(reduction="none")
 	# optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9,0.999))
 	optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
 
-	train(model, criterion, mesh_to_idx, mesh_vocab, word_to_idx, src_vocab)
+	train(model, criterion, mesh_to_idx, mesh_vocab, tokenizer)
 
 
 

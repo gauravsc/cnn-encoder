@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pytorch_pretrained_bert import BertTokenizer
-from model.Models import CNNModel, BERTCLassifierModel
+from model.Models import CNNModel, BERTCLassifierModel, BERTClassifierLabelTransfer
 from eval.eval import f1_score
 from utils.embedding_operations import read_embeddings
 
@@ -23,6 +23,17 @@ threshold_list = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 # set random seed
 rd.seed(9001)
 np.random.seed(9001)
+
+def mesh_name_to_id_mapping():
+	with open('../data/bioasq_dataset/MeSH_name_id_mapping_2017.txt','r') as f:
+		mappings = f.readlines()
+		mappings = [mapping.strip().split("=") for mapping in mappings]
+
+	name_to_descritor = {}
+	for mapping in mappings:
+		name_to_descritor[mapping[0]] = mapping[1]
+
+	return name_to_descritor
 
 def prepare_minibatch(data, mesh_to_idx, tokenizer):
 	X = []
@@ -116,8 +127,8 @@ def train(model, criterion, mesh_to_idx, mesh_vocab, tokenizer):
 			f1_score_curr = validate(model, mesh_to_idx, mesh_vocab, tokenizer, threshold)
 			print ("F1 score: ", f1_score_curr, " at threshold: ", threshold)
 			if f1_score_curr > best_f1_score:
-				torch.save(model.state_dict(), '../saved_models/bert_based/full_model.pt')
-				torch.save(model.bert.state_dict(), '../saved_models/bert_based/bert_retrained_mesh_model.pt')
+				torch.save(model.state_dict(), '../saved_models/bert_based_binary/full_model.pt')
+				torch.save(model.bert.state_dict(), '../saved_models/bert_based_binary/bert_retrained_mesh_model.pt')
 				best_f1_score = f1_score_curr
 		
 		print("Loss after ", ep, " Epochs:  ", np.mean(list_losses))
@@ -185,6 +196,9 @@ if __name__ == '__main__':
 	for mesh, idx in mesh_to_idx.items():
 		mesh_vocab[idx] = mesh
 
+	# MeSH english to descriptor codes
+	mesh_to_descriptor = mesh_name_to_id_mapping()	
+
 	# setting different model parameters
 	n_tgt_vocab = len(mesh_to_idx)
 	max_seq_len = 512
@@ -192,12 +206,12 @@ if __name__ == '__main__':
 	dropout = 0.1
 	learning_rate = 0.005
 
-	model = BERTCLassifierModel(n_tgt_vocab, dropout=dropout)
+	model = BERTClassifierLabelTransfer(dropout=dropout)
 	# model = nn.DataParallel(model, output_device=device)
 	model.to(device)
 
-	if load_model and os.path.isfile('../saved_models/bert_based/model.pt'):
-		model.load_state_dict(torch.load('../saved_models/bert_based/model.pt'))
+	if load_model and os.path.isfile('../saved_models/bert_based_binary/model.pt'):
+		model.load_state_dict(torch.load('../saved_models/bert_based_binary/model.pt'))
 		print ("Done loading the saved model .....")
 
 	criterion = torch.nn.BCEWithLogitsLoss(reduction="none")

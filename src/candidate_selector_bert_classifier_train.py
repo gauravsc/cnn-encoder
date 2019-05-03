@@ -78,15 +78,7 @@ def train(model, criterion, mesh_to_idx, mesh_vocab, tokenizer):
 			while i < len(file_content):
 				input_idx_seq, input_mask, target, labels = prepare_minibatch(file_content[i:i+batch_size], mesh_to_idx, tokenizer)
 				
-				# mask = np.zeros(target.shape)
-				# mask[target==1] = 1
-				# for k in range(target.shape[0]):
-				# 	idx_zeros = np.random.choice(np.where(mask[k, :]==0)[0], 50*len(labels[k]))
-				# 	# idx_zeros = np.where(mask[k, :]==0)[0]
-				# 	mask[k, idx_zeros] = 1
-
-				# mask = torch.tensor(mask).to(device, dtype=torch.float)
-
+				
 				input_idx_seq = torch.tensor(input_idx_seq).to(device, dtype=torch.long)
 				input_mask = torch.tensor(input_mask).to(device, dtype=torch.long)
 				target = torch.tensor(target).to(device, dtype=torch.float)

@@ -82,11 +82,11 @@ class BERTCLassifierModel(nn.Module):
 		enc_out, _ = self.bert(input_idxs, attention_mask=input_mask, output_all_encoded_layers=False)
 		# extract encoding for the [CLS] token
 		enc_out = enc_out[:,0,:]
-		enc_out = self.fc_layer(enc_out)
+		out = self.fc_layer(enc_out)
 		# pass the embedding for [CLS] token to the final classification layer
-		target = self.output_layer(enc_out)
+		target = self.output_layer(out)
 		
-		return target
+		return target, enc_out
 
 
 class BERTClassifierLabelTransfer(nn.Module):

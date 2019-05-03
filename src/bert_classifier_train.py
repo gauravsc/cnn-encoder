@@ -79,7 +79,7 @@ def train(model, criterion, mesh_to_idx, mesh_vocab, tokenizer):
 				input_idx_seq = torch.tensor(input_idx_seq).to(device, dtype=torch.long)
 				input_mask = torch.tensor(input_mask).to(device, dtype=torch.long)
 				target = torch.tensor(target).to(device, dtype=torch.float)
-				output = model(input_idx_seq, input_mask)
+				output, _ = model(input_idx_seq, input_mask)
 
 				# computing the loss over the prediction
 				loss = criterion(output, target)
@@ -142,7 +142,7 @@ def validate(model, mesh_to_idx, mesh_vocab, tokenizer, threshold):
 			input_idx_seq, input_mask, target, true_labels_batch = prepare_minibatch(file_content[i:i+4], mesh_to_idx, tokenizer)			
 			input_idx_seq = torch.tensor(input_idx_seq).to(device, dtype=torch.long)
 			input_mask = torch.tensor(input_mask).to(device, dtype=torch.long)
-			predict = model(input_idx_seq, input_mask)
+			predict, _ = model(input_idx_seq, input_mask)
 			predict = F.sigmoid(predict)
 			predict[predict>threshold] = 1
 			predict[predict<threshold] = 0

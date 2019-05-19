@@ -90,12 +90,12 @@ def validate(model, mesh_to_idx, mesh_vocab, tokenizer, threshold):
 	return f1_score_micro
 
 
-def extract_vector_representations(model, data, tokenizer, results):
+def extract_vector_representations(model, data, tokenizer):
 	model = model.eval()
 	# fieldnames = ['_id', 'table', 'abstract']
 	X = []; Mask = []; 
 	for rec in data:
-		text = data['abstract']
+		text = rec['abstract']
 		tokenized_text = tokenizer.tokenize('[CLS] ' + text.lower())[0:512]
 		idx_seq = tokenizer.convert_tokens_to_ids(tokenized_text)
 		src_seq = np.zeros(max_seq_len)
@@ -114,11 +114,12 @@ def extract_vector_representations(model, data, tokenizer, results):
 	_, encoder_output = model(X, Mask)
 	encoder_output = encoder_output.data.to('cpu').numpy()
 
+	res = {}; results = []
 	for idx, rec in enumerate(data):
-		results['table'] = data['table']
-		results['_id'] = data['_id']
-		results['representation'] = encoder_output[idx, :].tolist()
-
+		res['table'] = rec['table']
+		res['_id'] = rec['_id']
+		res['representation'] = encoder_output[idx, :].tolist()
+		results.append(res)
 	return results
 
 
@@ -150,13 +151,20 @@ if __name__ == '__main__':
 	model.to(device)
 	print ("Done loading the saved model .....")
 
-	results = {}; data = []; i = 0;
+	results = []; data = []; i = 0; ctr = 0;
 	for i, row in enumerate(csv_reader):
+		print (i)
 		data.append(row)
 		if (i+1) % batch_size == 0:
-			results = extract_vector_representations(model, data, tokenizer, results)
+			results.extend(extract_vector_representations(model, data, tokenizer))
 			data = []
+			if len(results) % (4*1250) == 0:
+				print ("Dumping :", len(results), " results into the file on disk")
+				json.dump(results, open('../data/vector_representations/vector_representations_'+str(ctr)+'.json', 'w'))
+				results = []; ctr += 1
 
-	json.dump(results, open('../data/vector_representations.json', 'w'))
+	if len(results) != 0:
+		print ("Dumping :", len(results), " results into the file on disk")
+		json.dump(results, open('../data/vector_representations/vector_representations_'+str(ctr)+'.json', 'w'))
 
 
